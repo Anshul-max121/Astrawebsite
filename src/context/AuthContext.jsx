@@ -1,71 +1,45 @@
 import { createContext, useContext, useState, useEffect, useCallback } from 'react'
 
 const AuthContext = createContext(null)
+
 const API = import.meta.env.VITE_API_URL || 'http://localhost:5000'
 
-const normalizeUser = (u) => {
-  if (!u) return null
-  const firstName = u.firstName ?? u.firstname ?? u.first_name ?? ''
-  const lastName = u.lastName ?? u.lastname ?? u.last_name ?? ''
-  const name =
-    u.name ??
-    u.fullName ??
-    u.username ??
-    [firstName, lastName].filter(Boolean).join(' ') ||
-    u.email ||
-    'User'
-  return { ...u, firstName, lastName, name }
-}
-
-const extractToken = (data) =>
-  data?.token ||
-  data?.accessToken ||
-  data?.jwt ||
-  data?.data?.token ||
-  data?.data?.accessToken ||
-  data?.data?.jwt
-
-const extractUser = (data) =>
-  data?.user ||
-  data?.data?.user ||
-  data?.profile ||
-  data?.data ||
-  null
-
+// ─── Small fetch helper ───────────────────────────────────────────────────────
 const apiFetch = async (path, options = {}) => {
   const token = localStorage.getItem('af_token')
 
   const res = await fetch(`${API}${path}`, {
     headers: {
       'Content-Type': 'application/json',
-      ...(token && token !== 'undefined' && token !== 'null'
-        ? { Authorization: `Bearer ${token}` }
-        : {}),
-      ...(options.headers || {}),
+      ...(token ? { Authorization: `Bearer ${token}` } : {}),
     },
-    credentials: 'include', // IMPORTANT for cookie auth
+    credentials: 'include', // send cookies too
     ...options,
   })
 
-  const text = await res.text()
-  const data = text ? JSON.parse(text) : {}
-
+  const data = await res.json()
   if (!res.ok) throw new Error(data.message || 'Something went wrong.')
   return data
 }
 
 export function AuthProvider({ children }) {
-  const [user, setUser] = useState(null)
+  const [user, setUser]       = useState(null)
   const [loading, setLoading] = useState(true)
 
-  // ✅ Restore session for BOTH: token auth & cookie auth
+  // ── On mount: restore session from stored JWT ──────────────────────────────
   useEffect(() => {
     const restore = async () => {
+      const token = localStorage.getItem('af_token')
+      if (!token) {
+        setLoading(false)
+        return
+      }
       try {
-        const data = await apiFetch('/api/auth/me')
-        setUser(normalizeUser(extractUser(data)))
+        const { user } = await apiFetch('/api/auth/me')
+        setUser(user)
       } catch {
-        setUser(null)
+        // Token expired or invalid — clear it
+        localStorage.removeItem('af_token')
       } finally {
         setLoading(false)
       }
@@ -73,59 +47,72 @@ export function AuthProvider({ children }) {
     restore()
   }, [])
 
+  // ── Handle Google OAuth callback token in URL ──────────────────────────────
+  // After Google redirects to /auth/callback?token=xxx, this effect fires,
+  // stores the token, fetches the user, then cleans the URL.
+  useEffect(() => {
+    if (!window.location.pathname.startsWith('/auth/callback')) return
+
+    const params = new URLSearchParams(window.location.search)
+    const token = params.get('token')
+    if (!token) return
+
+    localStorage.setItem('af_token', token)
+
+    apiFetch('/api/auth/me')
+      .then(({ user }) => {
+        setUser(user)
+        // Clean the token out of the URL, redirect to home
+        window.history.replaceState({}, '', '/')
+      })
+      .catch(() => {
+        localStorage.removeItem('af_token')
+        window.history.replaceState({}, '', '/signin')
+      })
+  }, [])
+
+  // ── Sign Up ────────────────────────────────────────────────────────────────
   const signUp = useCallback(async (firstName, lastName, email, password) => {
-    const data = await apiFetch('/api/auth/signup', {
+    const { token, user } = await apiFetch('/api/auth/signup', {
       method: 'POST',
       body: JSON.stringify({ firstName, lastName, email, password }),
     })
-
-    const token = extractToken(data)
-    if (token) localStorage.setItem('af_token', token)
-
-    // ✅ user may not be returned; cookie might be set. fallback to /me
-    const u = normalizeUser(extractUser(data))
-    if (u) {
-      setUser(u)
-      return u
-    }
-
-    const me = await apiFetch('/api/auth/me')
-    const meUser = normalizeUser(extractUser(me))
-    setUser(meUser)
-    return meUser
+    localStorage.setItem('af_token', token)
+    setUser(user)
+    return user
   }, [])
 
+  // ── Sign In (email + password) ─────────────────────────────────────────────
   const signIn = useCallback(async (email, password) => {
-    const data = await apiFetch('/api/auth/signin', {
+    const { token, user } = await apiFetch('/api/auth/signin', {
       method: 'POST',
       body: JSON.stringify({ email, password }),
     })
-
-    const token = extractToken(data)
-    if (token) localStorage.setItem('af_token', token)
-
-    const u = normalizeUser(extractUser(data))
-    if (u) {
-      setUser(u)
-      return u
-    }
-
-    const me = await apiFetch('/api/auth/me')
-    const meUser = normalizeUser(extractUser(me))
-    setUser(meUser)
-    return meUser
+    localStorage.setItem('af_token', token)
+    setUser(user)
+    return user
   }, [])
 
+  // ── Google OAuth ───────────────────────────────────────────────────────────
+  // Simply redirect the browser to the backend Google OAuth route.
+  // After Google auth, the backend redirects back to /auth/callback?token=xxx
+  const signInWithGoogle = useCallback(() => {
+    window.location.href = `${API}/api/auth/google`
+  }, [])
+
+  // ── Sign Out ───────────────────────────────────────────────────────────────
   const signOut = useCallback(async () => {
     try {
       await apiFetch('/api/auth/signout', { method: 'POST' })
-    } catch {}
+    } catch {
+      // If signout API fails, still clear local state
+    }
     localStorage.removeItem('af_token')
     setUser(null)
   }, [])
 
   return (
-    <AuthContext.Provider value={{ user, loading, signIn, signUp, signOut }}>
+    <AuthContext.Provider value={{ user, loading, signIn, signUp, signInWithGoogle, signOut }}>
       {children}
     </AuthContext.Provider>
   )
