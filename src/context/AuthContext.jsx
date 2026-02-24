@@ -4,6 +4,15 @@ const AuthContext = createContext(null)
 
 const API = import.meta.env.VITE_API_URL || 'http://localhost:5000'
 
+// ─── Normalize user: always add .name field ───────────────────────────────────
+const normalizeUser = (u) => {
+  if (!u) return null
+  return {
+    ...u,
+    name: u.name || `${u.firstName || ''} ${u.lastName || ''}`.trim() || u.email || 'User',
+  }
+}
+
 // ─── Small fetch helper ───────────────────────────────────────────────────────
 const apiFetch = async (path, options = {}) => {
   const token = localStorage.getItem('af_token')
@@ -36,7 +45,7 @@ export function AuthProvider({ children }) {
       }
       try {
         const { user } = await apiFetch('/api/auth/me')
-        setUser(user)
+        setUser(normalizeUser(user))
       } catch {
         // Token expired or invalid — clear it
         localStorage.removeItem('af_token')
@@ -61,7 +70,7 @@ export function AuthProvider({ children }) {
 
     apiFetch('/api/auth/me')
       .then(({ user }) => {
-        setUser(user)
+        setUser(normalizeUser(user))
         // Clean the token out of the URL, redirect to home
         window.history.replaceState({}, '', '/')
       })
@@ -78,7 +87,7 @@ export function AuthProvider({ children }) {
       body: JSON.stringify({ firstName, lastName, email, password }),
     })
     localStorage.setItem('af_token', token)
-    setUser(user)
+    setUser(normalizeUser(user))
     return user
   }, [])
 
@@ -89,7 +98,7 @@ export function AuthProvider({ children }) {
       body: JSON.stringify({ email, password }),
     })
     localStorage.setItem('af_token', token)
-    setUser(user)
+    setUser(normalizeUser(user))
     return user
   }, [])
 
