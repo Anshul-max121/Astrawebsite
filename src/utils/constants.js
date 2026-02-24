@@ -1,7 +1,7 @@
 // ─── Download links ───────────────────────────────────────────────────────────
 // Update these with your actual GitHub Release direct download URLs
 export const RELEASE_VERSION = 'v1.0.0'
-export const GITHUB_URL = 'https://github.com/AnshulKhichi11/AstraForge'
+export const GITHUB_URL = 'https://github.com/Anshul-max121/Astrawebsite'
 export const NPM_PACKAGE = 'astradb'
 
 export const DOWNLOADS = {
