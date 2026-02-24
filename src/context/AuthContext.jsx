@@ -5,21 +5,15 @@ const API = import.meta.env.VITE_API_URL || 'http://localhost:5000'
 
 const normalizeUser = (u) => {
   if (!u) return null
-
-  const firstName =
-    u.firstName ?? u.firstname ?? u.first_name ?? ''
-
-  const lastName =
-    u.lastName ?? u.lastname ?? u.last_name ?? ''
-
+  const firstName = u.firstName ?? u.firstname ?? u.first_name ?? ''
+  const lastName = u.lastName ?? u.lastname ?? u.last_name ?? ''
   const name =
     u.name ??
     u.fullName ??
     u.username ??
-    [firstName, lastName].filter(Boolean).join(' ') ??
-    u.email ??
+    [firstName, lastName].filter(Boolean).join(' ') ||
+    u.email ||
     'User'
-
   return { ...u, firstName, lastName, name }
 }
 
@@ -35,7 +29,8 @@ const extractUser = (data) =>
   data?.user ||
   data?.data?.user ||
   data?.profile ||
-  data?.data
+  data?.data ||
+  null
 
 const apiFetch = async (path, options = {}) => {
   const token = localStorage.getItem('af_token')
@@ -43,13 +38,15 @@ const apiFetch = async (path, options = {}) => {
   const res = await fetch(`${API}${path}`, {
     headers: {
       'Content-Type': 'application/json',
-      ...(token ? { Authorization: `Bearer ${token}` } : {}),
+      ...(token && token !== 'undefined' && token !== 'null'
+        ? { Authorization: `Bearer ${token}` }
+        : {}),
+      ...(options.headers || {}),
     },
-    credentials: 'include',
+    credentials: 'include', // IMPORTANT for cookie auth
     ...options,
   })
 
-  // If backend returns empty response sometimes
   const text = await res.text()
   const data = text ? JSON.parse(text) : {}
 
@@ -61,48 +58,19 @@ export function AuthProvider({ children }) {
   const [user, setUser] = useState(null)
   const [loading, setLoading] = useState(true)
 
-  // Restore session
+  // ✅ Restore session for BOTH: token auth & cookie auth
   useEffect(() => {
     const restore = async () => {
-      const token = localStorage.getItem('af_token')
-      if (!token || token === 'undefined' || token === 'null') {
-        localStorage.removeItem('af_token')
-        setLoading(false)
-        return
-      }
-
       try {
         const data = await apiFetch('/api/auth/me')
-        const u = normalizeUser(extractUser(data))
-        setUser(u)
+        setUser(normalizeUser(extractUser(data)))
       } catch {
-        localStorage.removeItem('af_token')
         setUser(null)
       } finally {
         setLoading(false)
       }
     }
     restore()
-  }, [])
-
-  // Google callback
-  useEffect(() => {
-    if (!window.location.pathname.startsWith('/auth/callback')) return
-    const params = new URLSearchParams(window.location.search)
-    const token = params.get('token')
-    if (!token) return
-
-    localStorage.setItem('af_token', token)
-
-    apiFetch('/api/auth/me')
-      .then((data) => {
-        setUser(normalizeUser(extractUser(data)))
-        window.history.replaceState({}, '', '/')
-      })
-      .catch(() => {
-        localStorage.removeItem('af_token')
-        window.history.replaceState({}, '', '/signin')
-      })
   }, [])
 
   const signUp = useCallback(async (firstName, lastName, email, password) => {
@@ -112,12 +80,19 @@ export function AuthProvider({ children }) {
     })
 
     const token = extractToken(data)
-    const u = normalizeUser(extractUser(data))
+    if (token) localStorage.setItem('af_token', token)
 
-    if (!token) throw new Error('Signup succeeded but token is missing in API response.')
-    localStorage.setItem('af_token', token)
-    setUser(u)
-    return u
+    // ✅ user may not be returned; cookie might be set. fallback to /me
+    const u = normalizeUser(extractUser(data))
+    if (u) {
+      setUser(u)
+      return u
+    }
+
+    const me = await apiFetch('/api/auth/me')
+    const meUser = normalizeUser(extractUser(me))
+    setUser(meUser)
+    return meUser
   }, [])
 
   const signIn = useCallback(async (email, password) => {
@@ -127,26 +102,30 @@ export function AuthProvider({ children }) {
     })
 
     const token = extractToken(data)
+    if (token) localStorage.setItem('af_token', token)
+
     const u = normalizeUser(extractUser(data))
+    if (u) {
+      setUser(u)
+      return u
+    }
 
-    if (!token) throw new Error('Signin succeeded but token is missing in API response.')
-    localStorage.setItem('af_token', token)
-    setUser(u)
-    return u
-  }, [])
-
-  const signInWithGoogle = useCallback(() => {
-    window.location.href = `${API}/api/auth/google`
+    const me = await apiFetch('/api/auth/me')
+    const meUser = normalizeUser(extractUser(me))
+    setUser(meUser)
+    return meUser
   }, [])
 
   const signOut = useCallback(async () => {
-    try { await apiFetch('/api/auth/signout', { method: 'POST' }) } catch {}
+    try {
+      await apiFetch('/api/auth/signout', { method: 'POST' })
+    } catch {}
     localStorage.removeItem('af_token')
     setUser(null)
   }, [])
 
   return (
-    <AuthContext.Provider value={{ user, loading, signIn, signUp, signInWithGoogle, signOut }}>
+    <AuthContext.Provider value={{ user, loading, signIn, signUp, signOut }}>
       {children}
     </AuthContext.Provider>
   )
